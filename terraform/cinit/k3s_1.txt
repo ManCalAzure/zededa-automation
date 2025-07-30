@@ -1,0 +1,161 @@
+Content-Type: multipart/mixed; boundary="===============BOUNDARY=="
+MIME-Version: 1.0
+
+--===============BOUNDARY==
+Content-Type: text/cloud-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="user-data"
+
+#cloud-config
+hostname: K3S-Runtime-1
+
+ssh_pwauth: true
+lock_passwd: false
+
+users:
+  - name: manny
+    ssh-authorized-keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDe9gUf6zVEOEd7B8mLuHDmY3LN7LlhEH3RfMij6fQxBeWZNbRieuboIGbJNTs1cqMMxEnKNadMGdlR6yQvjJ2SusvBwoWLY0tyNrZ6tdTUi1q5g/3FbJQwQcSDpQTFmpdUKs/3mtrmV90POk6lfIlwePv4qEmvAOCpLz/W2XnwN/dsTLu2wSZW4tHm1TLTRACjDvOxWE8DvJH7xZ68G28zT52zi20rQW56ieW0v7HNyeut4SH94xj8HhkTJw6y5L+0NisKPonKXYVpaFWzDs5SbyrJISQYU9gf3guhOLByH4xt8PJ5NArMgV+srSH14QuB3346OS299yT54/V56DPC0N2L1E64jBxBy4Vt3FuRGbH3SjKyOu5DBuKORJDn05ZO/ckmKD+7a2vzQPnJ+h4MdKD3yJ0cY2ptL4xYnRNzpYArAVurxmyX5+ddMRiXi6kL7dyEPQVR3VmnwAntysdHxMX+19L5h0eQLzD1YD8sCGlEWm7z5ctxoa63uXGMCwx9yIDHJQgK7cdqn3mKUHSPY8i1wQLyMLG561114M5AW7H+fD1VbdKDhigMTv1f9vjKhXA5vRavIttHrMbE2BjYHzDgC4USEkl7vNVjRvQ+j8MC1efWuRLQAQKUWxAd+GTIbo85lC8upzXI0QVfRP8cMrpjtlKiINkQn44cZLih/Q== mcalero@Mannys-MacBook-Pro.local
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+
+chpasswd:
+  list: |
+    manny:P@ssword123
+  expire: false
+
+package_update: true
+package_upgrade: true
+
+write_files:
+  - path: /etc/ssh/sshd_config
+    content: |
+      # Cloud-init modified SSH configuration
+      PasswordAuthentication yes
+
+  - path: /root/join-k3s.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      apt-get update
+      apt-get install -y curl jq
+
+      RANCHER_URL="https://172.16.8.174"
+      RANCHER_USER="admin"
+      RANCHER_PASS="Ahina88f!!!!"
+      CLUSTER_PREFIX="zededa-demo-dealership-"
+
+      # Extract numeric suffix from hostname (e.g., K3S-Instance-1 -> 1)
+      HOSTNAME=$(hostname)
+      SUFFIX=$(echo "$HOSTNAME" | grep -oE '[0-9]+$')
+      if [ -z "$SUFFIX" ]; then
+        echo "Could not extract numeric suffix from hostname: $HOSTNAME"
+        exit 1
+      fi
+
+      CLUSTER_NAME="${CLUSTER_PREFIX}${SUFFIX}"
+
+      # Wait until Rancher API is ready
+      echo "Waiting for Rancher server at $RANCHER_URL to become available..."
+      for i in {1..60}; do
+        if curl -sk --connect-timeout 3 "$RANCHER_URL/v3/settings/cacerts" > /dev/null; then
+          echo "Rancher API is ready."
+          break
+        else
+          echo "Waiting... ($i/60)"
+          sleep 10
+        fi
+      done
+
+      # Get API token from Rancher
+      LOGIN_RESP=$(curl -sk -X POST "$RANCHER_URL/v3-public/localProviders/local?action=login" \
+        -H 'Content-Type: application/json' \
+        -d "{\"username\":\"$RANCHER_USER\",\"password\":\"$RANCHER_PASS\"}")
+      API_TOKEN=$(echo "$LOGIN_RESP" | jq -r .token)
+
+      # Get cluster ID for our matching cluster
+      CLUSTER_ID=$(curl -sk "$RANCHER_URL/v3/clusters" \
+        -H "Authorization: Bearer $API_TOKEN" | jq -r ".data[] | select(.name==\"$CLUSTER_NAME\") | .id")
+
+      if [ -z "$CLUSTER_ID" ]; then
+        echo "Could not find cluster with name $CLUSTER_NAME"
+        exit 1
+      fi
+
+      echo "Registering with cluster: $CLUSTER_NAME (ID: $CLUSTER_ID)"
+
+      # Get or create the registration token for this cluster
+      REG_URL="$RANCHER_URL/v3/clusterregistrationtokens?clusterId=$CLUSTER_ID"
+      curl -sk -H "Authorization: Bearer $API_TOKEN" -X POST "$REG_URL" > /dev/null
+
+      # Get the join command (nodeCommand)
+      NODE_COMMAND=$(curl -sk "$RANCHER_URL/v3/clusterregistrationtokens?clusterId=$CLUSTER_ID" \
+        -H "Authorization: Bearer $API_TOKEN" | jq -r '.data[0].nodeCommand')
+
+      if [ -z "$NODE_COMMAND" ]; then
+        echo "Failed to get join command from Rancher."
+        exit 1
+      fi
+
+      echo "Joining K3s cluster with:"
+      echo "$NODE_COMMAND"
+
+      # Always force --insecure curl usage
+      if echo "$NODE_COMMAND" | grep -q "system-agent-install.sh"; then
+        # Replace curl and inject all roles
+        SA_JOIN_CMD=$(echo "$NODE_COMMAND" | sed -e 's|curl |curl -k |' -e "s|sh -s -|sh -s - --etcd --controlplane --worker|")
+        echo "Executing: $SA_JOIN_CMD"
+        eval "$SA_JOIN_CMD"
+      else
+        # If using legacy k3s shell installer, also force curl -k and all roles
+        K3S_JOIN_CMD=$(echo "$NODE_COMMAND" | sed -e 's|curl |curl -k |' -e "s|sh -|sh - --etcd --controlplane --worker|")
+        echo "Executing: $K3S_JOIN_CMD"
+        eval "$K3S_JOIN_CMD"
+      fi
+
+runcmd:
+  - netplan generate
+  - netplan apply
+  - apt-get update
+  - apt-get install -y openssh-server
+  - systemctl enable ssh
+  - systemctl start ssh
+  - bash /root/join-k3s.sh
+
+--===============BOUNDARY==
+Content-Type: text/plain; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="meta-data"
+
+instance-id: K3S-Runtime-1
+local-hostname: K3S-Runtime-1
+
+--===============BOUNDARY==
+Content-Type: text/network-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="network-config"
+
+version: 2
+ethernets:
+  enp3s0:
+    dhcp4: false
+    addresses:
+      - 10.12.0.11/24
+    routes:
+      - to: default
+        via: 10.12.0.1
+    nameservers:
+      addresses:
+        - 1.1.1.1
+        - 1.0.0.1
+  enp4s0:
+    dhcp4: false
+    addresses:
+      - 10.1.0.50/24
+
+--===============BOUNDARY==--

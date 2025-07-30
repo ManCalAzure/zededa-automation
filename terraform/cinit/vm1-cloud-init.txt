@@ -1,0 +1,74 @@
+Content-Type: multipart/mixed; boundary="===============BOUNDARY=="
+MIME-Version: 1.0
+
+--===============BOUNDARY==
+Content-Type: text/cloud-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="user-data"
+
+#cloud-config
+hostname: VM-1-ON-LAN-1
+
+ssh_pwauth: true
+lock_passwd: false
+
+users:
+  - name: manny
+    ssh-authorized-keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDe9gUf6zVEOEd7B8mLuHDmY3LN7LlhEH3RfMij6fQxBeWZNbRieuboIGbJNTs1cqMMxEnKNadMGdlR6yQvjJ2SusvBwoWLY0tyNrZ6tdTUi1q5g/3FbJQwQcSDpQTFmpdUKs/3mtrmV90POk6lfIlwePv4qEmvAOCpLz/W2XnwN/dsTLu2wSZW4tHm1TLTRACjDvOxWE8DvJH7xZ68G28zT52zi20rQW56ieW0v7HNyeut4SH94xj8HhkTJw6y5L+0NisKPonKXYVpaFWzDs5SbyrJISQYU9gf3guhOLByH4xt8PJ5NArMgV+srSH14QuB3346OS299yT54/V56DPC0N2L1E64jBxBy4Vt3FuRGbH3SjKyOu5DBuKORJDn05ZO/ckmKD+7a2vzQPnJ+h4MdKD3yJ0cY2ptL4xYnRNzpYArAVurxmyX5+ddMRiXi6kL7dyEPQVR3VmnwAntysdHxMX+19L5h0eQLzD1YD8sCGlEWm7z5ctxoa63uXGMCwx9yIDHJQgK7cdqn3mKUHSPY8i1wQLyMLG561114M5AW7H+fD1VbdKDhigMTv1f9vjKhXA5vRavIttHrMbE2BjYHzDgC4USEkl7vNVjRvQ+j8MC1efWuRLQAQKUWxAd+GTIbo85lC8upzXI0QVfRP8cMrpjtlKiINkQn44cZLih/Q== mcalero@Mannys-MacBook-Pro.local
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+
+chpasswd:
+  list: |
+    manny:P@ssword123
+  expire: false
+
+package_update: true
+package_upgrade: true
+
+write_files:
+  - path: /etc/ssh/sshd_config
+    content: |
+      # Cloud-init modified SSH configuration
+      PasswordAuthentication yes
+
+runcmd:
+  - netplan generate
+  - netplan apply
+  - apt-get update
+  - apt-get install -y openssh-server
+  - systemctl enable ssh
+  - systemctl start ssh
+
+--===============BOUNDARY==
+Content-Type: text/plain; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="meta-data"
+
+instance-id: VM-1-ON-LAN
+local-hostname: VM-1-ON-LAN
+
+--===============BOUNDARY==
+Content-Type: text/network-config; charset="us-ascii"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="network-config"
+
+version: 2
+ethernets:
+  enp3s0:
+    dhcp4: false
+    addresses:
+      - 10.10.0.10/24
+    routes:
+      - to: default
+        via: 10.10.0.1
+    nameservers:
+      addresses:
+        - 1.1.1.1
+        - 1.0.0.1
+
+--===============BOUNDARY==--
